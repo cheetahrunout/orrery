@@ -1,0 +1,164 @@
+import { useEffect, useRef } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import * as THREE from "three";
+import { getBody, view } from "@/lib/orrery/bodies";
+import { orbitPointer } from "@/lib/orrery/pointer";
+import { bodyWorldPosition } from "@/lib/orrery/registry";
+import { useOrrery } from "@/lib/orrery/store";
+
+const _target = new THREE.Vector3();
+const _desired = new THREE.Vector3();
+const _offset = new THREE.Vector3();
+const _look = new THREE.Vector3();
+
+function focusRadius(id: string) {
+  const body = getBody(id);
+  if (id === "sun") return 74;
+  return body.radius * 7.5 + 5.5;
+}
+
+function focusLimits(id: string) {
+  const body = getBody(id);
+  if (id === "sun") return { min: 16, max: 170 };
+  return { min: body.radius * 2.4 + 1.2, max: body.radius * 28 + 18 };
+}
+
+export function CameraRig() {
+  const { gl, camera } = useThree();
+  const focusedId = useOrrery((s) => s.focusedId);
+  const dragging = useRef(false);
+  const last = useRef({ x: 0, y: 0 });
+  const pinch = useRef<number | null>(null);
+  const idle = useRef(0);
+  const radiusGoal = useRef(view.radius);
+  const anim = useRef(0);
+
+  useEffect(() => {
+    const limits = focusLimits(focusedId);
+    view.minR = limits.min;
+    view.maxR = limits.max;
+    radiusGoal.current = THREE.MathUtils.clamp(
+      focusRadius(focusedId),
+      limits.min,
+      limits.max,
+    );
+    anim.current = 1;
+  }, [focusedId]);
+
+  useEffect(() => {
+    const el = gl.domElement;
+    el.style.touchAction = "none";
+
+    const down = (e: PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      dragging.current = true;
+      orbitPointer.moved = false;
+      last.current = { x: e.clientX, y: e.clientY };
+      idle.current = 0;
+      useOrrery.getState().dismissHint();
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* already captured */
+      }
+    };
+
+    const move = (e: PointerEvent) => {
+      if (!dragging.current) return;
+      const dx = e.clientX - last.current.x;
+      const dy = e.clientY - last.current.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) orbitPointer.moved = true;
+      last.current = { x: e.clientX, y: e.clientY };
+      view.theta -= dx * 0.005;
+      view.phi = THREE.MathUtils.clamp(
+        view.phi - dy * 0.004,
+        0.18,
+        Math.PI - 0.18,
+      );
+      idle.current = 0;
+    };
+
+    const up = () => {
+      dragging.current = false;
+    };
+
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(e.deltaY * 0.0012);
+      view.zoomBy(factor);
+      radiusGoal.current = view.radius;
+      idle.current = 0;
+      useOrrery.getState().dismissHint();
+    };
+
+    const touchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const a = e.touches[0]!;
+        const b = e.touches[1]!;
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        if (pinch.current != null) {
+          view.zoomBy(pinch.current / dist);
+          radiusGoal.current = view.radius;
+        }
+        pinch.current = dist;
+        idle.current = 0;
+        orbitPointer.moved = true;
+      }
+    };
+    const touchEnd = () => {
+      pinch.current = null;
+    };
+
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    el.addEventListener("wheel", wheel, { passive: false });
+    el.addEventListener("touchmove", touchMove, { passive: true });
+    el.addEventListener("touchend", touchEnd);
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      el.removeEventListener("wheel", wheel);
+      el.removeEventListener("touchmove", touchMove);
+      el.removeEventListener("touchend", touchEnd);
+    };
+  }, [gl]);
+
+  useFrame((_, rawDelta) => {
+    const delta = Math.min(rawDelta, 0.1);
+    bodyWorldPosition(focusedId, _desired);
+
+    const follow = 1 - Math.exp(-4.2 * delta);
+    _target.lerp(_desired, follow);
+
+    if (anim.current > 0) {
+      anim.current = Math.max(0, anim.current - delta * 0.85);
+      view.radius = THREE.MathUtils.lerp(
+        view.radius,
+        radiusGoal.current,
+        1 - Math.exp(-3.4 * delta),
+      );
+    }
+
+    idle.current += delta;
+    const overview = focusedId === "sun";
+    if (overview && !dragging.current && idle.current > 2.4) {
+      view.theta += delta * 0.045;
+    }
+
+    const sinPhi = Math.sin(view.phi);
+    _offset.set(
+      view.radius * sinPhi * Math.sin(view.theta),
+      view.radius * Math.cos(view.phi),
+      view.radius * sinPhi * Math.cos(view.theta),
+    );
+    _look.copy(_target).add(_offset);
+    camera.position.lerp(_look, 1 - Math.exp(-7.5 * delta));
+    camera.lookAt(_target);
+  });
+
+  return null;
+}
