@@ -3,11 +3,13 @@ import {
   Captions,
   Focus,
   Minus,
+  Info as InfoIcon,
   Pause,
   Play,
   Plus,
   Spline,
   Undo2,
+  X,
 } from "lucide-react";
 import { BODIES, getBody, sim, view } from "@/lib/orrery/bodies";
 import { useOrrery } from "@/lib/orrery/store";
@@ -42,6 +44,7 @@ export function Hud() {
   const focusedId = useOrrery((s) => s.focusedId);
   const labels = useOrrery((s) => s.labels);
   const trails = useOrrery((s) => s.trails);
+  const info = useOrrery((s) => s.info);
   const hint = useOrrery((s) => s.hint);
   const focused = getBody(focusedId);
 
@@ -85,7 +88,7 @@ export function Hud() {
         <div className="mt-2 flex h-[calc(100%-3rem)] items-stretch justify-between gap-3 md:mt-0 md:h-full">
           <nav
             aria-label="Celestial bodies"
-            className="pointer-events-auto hidden w-44 flex-col justify-center gap-0.5 md:flex"
+            className="hidden w-44 flex-col justify-center gap-0.5 md:flex"
           >
             {BODIES.map((b) => {
               const active = focusedId === b.id;
@@ -95,7 +98,7 @@ export function Hud() {
                   type="button"
                   onClick={() => useOrrery.getState().setFocused(b.id)}
                   className={cn(
-                    "flex h-9 items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-sm transition-colors duration-(--motion-quick)",
+                    "pointer-events-auto flex h-9 items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-sm transition-colors duration-(--motion-quick)",
                     active
                       ? "bg-surface-2 text-fg"
                       : "text-muted hover:bg-surface/80 hover:text-fg",
@@ -111,8 +114,9 @@ export function Hud() {
             })}
           </nav>
 
-          <aside className="pointer-events-auto ml-auto flex w-full max-w-sm flex-col justify-end md:w-72 md:justify-center">
-            <article className="rounded-[var(--radius-xl)] bg-surface/90 p-3 shadow-[var(--shadow-border)] backdrop-blur-sm md:p-5">
+          <aside className="ml-auto flex w-full max-w-sm flex-col justify-end md:w-72 md:justify-center">
+            {info ? (
+            <article className="pointer-events-auto rounded-[var(--radius-xl)] bg-surface/90 p-3 shadow-[var(--shadow-border)] backdrop-blur-sm md:p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="font-display text-xl leading-none tracking-display italic text-fg md:text-2xl">
@@ -126,16 +130,26 @@ export function Hud() {
                         : "Planet"}
                   </p>
                 </div>
-                {focusedId !== "sun" ? (
+                <div className="flex items-center gap-0.5">
+                  {focusedId !== "sun" ? (
+                    <Button
+                      variant="quiet"
+                      size="icon-sm"
+                      aria-label="Return to overview"
+                      onClick={() => useOrrery.getState().setFocused("sun")}
+                    >
+                      <Undo2 className="size-4" />
+                    </Button>
+                  ) : null}
                   <Button
                     variant="quiet"
                     size="icon-sm"
-                    aria-label="Return to overview"
-                    onClick={() => useOrrery.getState().setFocused("sun")}
+                    aria-label="Hide planet details"
+                    onClick={() => useOrrery.getState().setInfo(false)}
                   >
-                    <Undo2 className="size-4" />
+                    <X className="size-4" />
                   </Button>
-                ) : null}
+                </div>
               </div>
               <p className="mt-3 line-clamp-2 text-sm leading-relaxed text-pretty text-muted md:line-clamp-none">
                 {focused.blurb}
@@ -153,6 +167,7 @@ export function Hud() {
                 ))}
               </dl>
             </article>
+            ) : null}
           </aside>
         </div>
       </div>
@@ -212,6 +227,15 @@ export function Hud() {
           >
             <Spline className="size-3.5" />
             Trails
+          </Button>
+          <Button
+            variant={info ? "outline" : "quiet"}
+            size="sm"
+            aria-pressed={info}
+            onClick={() => useOrrery.getState().toggleInfo()}
+          >
+            <InfoIcon className="size-3.5" />
+            Details
           </Button>
           <Button
             variant="quiet"

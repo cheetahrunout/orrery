@@ -142,10 +142,29 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+/**
+ * Static export for GitHub Pages, opted into with PAGES_BASE (see
+ * .github/workflows/deploy-pages.yml). Unset (the default), nothing here
+ * changes: the Vercel preset still builds the SSR output the normal deploy
+ * path expects.
+ *
+ * Normalised to leading+trailing slashes ("/orrery/", or "/" for a user page
+ * or custom domain) so the workflow can pass configure-pages' `base_path`
+ * through without caring how it punctuates.
+ */
+function normalizeBase(raw: string | undefined): string | null {
+  const trimmed = raw?.trim().replace(/^\/+|\/+$/g, "") ?? "";
+  if (!raw?.trim()) return null;
+  return trimmed ? `/${trimmed}/` : "/";
+}
+
+const pagesBase = normalizeBase(process.env.PAGES_BASE);
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
 export default defineConfig(({ command, isPreview }) => ({
+  ...(pagesBase ? { base: pagesBase } : {}),
   server: {
     host: "0.0.0.0",
     port: 8080,
@@ -166,15 +185,23 @@ export default defineConfig(({ command, isPreview }) => ({
     // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
     grokPwaPlugin(),
     tailwindcss(),
-    tanstackStart(),
+    tanstackStart(
+      pagesBase
+        ? { router: { basepath: pagesBase } }
+        : undefined,
+    ),
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            preset: pagesBase ? "node" : "vercel",
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
-            serverDir: "./server",
+            //
+            // Omitted for Pages: that middleware is Grok live-preview chrome
+            // with no role on a static host, and the prerenderer's own bundle
+            // pass cannot resolve its `?raw` import of scripts/install-page.html.
+            ...(pagesBase ? {} : { serverDir: "./server" }),
           }),
         ]
       : []),

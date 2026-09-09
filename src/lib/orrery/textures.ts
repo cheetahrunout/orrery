@@ -30,9 +30,13 @@ function lerpC(a: number[], b: number[], t: number) {
 function noise2(rng: () => number, w: number, h: number, octaves = 4) {
   const base = new Float32Array(w * h);
   for (let i = 0; i < base.length; i++) base[i] = rng();
+  // JS % keeps the sign of the dividend, so a plain `x % w` on the negative
+  // coordinates the swirl offsets produce reads out of bounds (NaN -> black
+  // pixels) or wraps into the previous row. Floor-mod instead.
+  const wrap = (v: number, n: number) => ((v % n) + n) % n;
   const sample = (x: number, y: number) => {
-    const x0 = Math.floor(x) % w;
-    const y0 = Math.floor(y) % h;
+    const x0 = wrap(Math.floor(x), w);
+    const y0 = wrap(Math.floor(y), h);
     const x1 = (x0 + 1) % w;
     const y1 = (y0 + 1) % h;
     const fx = x - Math.floor(x);
@@ -56,11 +60,6 @@ function noise2(rng: () => number, w: number, h: number, octaves = 4) {
     }
     return v / norm;
   };
-}
-
-function hexToRgb(hex: string): number[] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 function paintSphere(
@@ -261,6 +260,10 @@ export function createBodyTexture(body: Body) {
   return canvasTexture(paint);
 }
 
+/**
+ * Banding runs along u, which `ringUvs` remaps to the radial axis — v is the
+ * angular axis, so every row is identical (a band must not vary with angle).
+ */
 export function createRingTexture() {
   return canvasTexture((ctx, w, h) => {
     const img = ctx.createImageData(w, h);
@@ -271,14 +274,16 @@ export function createRingTexture() {
       if (u > 0.18 && u < 0.42) alpha = 180;
       else if (u > 0.46 && u < 0.72) alpha = 150;
       else if (u > 0.76 && u < 0.96) alpha = 90;
-      const noise = ((x * 17) % 7) * 4;
-      const col = 210 + noise;
+      // Fine ringlet striation, so the bands don't read as flat blocks.
+      const grain = ((x * 17) % 7) * 4;
+      const col = 210 + grain;
+      const a = alpha * (0.82 + (grain / 24) * 0.18);
       for (let y = 0; y < h; y++) {
         const i = (y * w + x) * 4;
         d[i] = col;
         d[i + 1] = col - 16;
         d[i + 2] = col - 40;
-        d[i + 3] = alpha * (0.7 + (y / h) * 0.3);
+        d[i + 3] = a;
       }
     }
     ctx.putImageData(img, 0, 0);

@@ -6,6 +6,7 @@ export type OrreryState = {
   focusedId: string
   labels: boolean
   trails: boolean
+  info: boolean
   hint: boolean
   setPaused: (paused: boolean) => void
   togglePaused: () => void
@@ -13,6 +14,8 @@ export type OrreryState = {
   setFocused: (id: string) => void
   toggleLabels: () => void
   toggleTrails: () => void
+  toggleInfo: () => void
+  setInfo: (info: boolean) => void
   dismissHint: () => void
 };
 
@@ -22,6 +25,7 @@ export const useOrrery = create<OrreryState>((set) => ({
   focusedId: "sun",
   labels: true,
   trails: true,
+  info: true,
   hint: true,
   setPaused: (paused) => set({ paused }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
@@ -29,5 +33,7 @@ export const useOrrery = create<OrreryState>((set) => ({
   setFocused: (focusedId) => set({ focusedId, hint: false }),
   toggleLabels: () => set((s) => ({ labels: !s.labels })),
   toggleTrails: () => set((s) => ({ trails: !s.trails })),
+  toggleInfo: () => set((s) => ({ info: !s.info })),
+  setInfo: (info) => set({ info }),
   dismissHint: () => set({ hint: false }),
 }));

@@ -24,8 +24,10 @@ export function OrreryApp() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (el?.isContentEditable) return;
       const store = useOrrery.getState();
       if (e.code === "Space") {
         e.preventDefault();
@@ -36,6 +38,8 @@ export function OrreryApp() {
         store.toggleLabels();
       } else if (e.key === "t" || e.key === "T") {
         store.toggleTrails();
+      } else if (e.key === "i" || e.key === "I") {
+        store.toggleInfo();
       } else if (e.key === "[") {
         store.setSpeed(Math.max(0.25, +(store.speed / 2).toFixed(2)));
       } else if (e.key === "]") {
@@ -44,8 +48,9 @@ export function OrreryApp() {
         view.zoomBy(1.2);
       } else if (e.key === "=" || e.key === "+") {
         view.zoomBy(0.82);
-      } else if (e.key >= "1" && e.key <= "9") {
-        const body = BODIES[Number(e.key) - 1];
+      } else if (e.key >= "0" && e.key <= "9") {
+        // 1-9 walk Sun..Neptune; 0 is the 10th slot so Pluto is reachable too.
+        const body = BODIES[(Number(e.key) + BODIES.length - 1) % BODIES.length];
         if (body) store.setFocused(body.id);
       }
     };

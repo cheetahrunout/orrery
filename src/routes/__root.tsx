@@ -5,6 +5,15 @@ import appCss from "../styles.css?url";
 
 const APP_NAME = "Orrery";
 
+/**
+ * Vite rewrites asset *imports* for `base`, but not path literals — under a
+ * GitHub Pages project subpath ("/orrery/") a hardcoded "/favicon.svg" 404s.
+ * BASE_URL is "/" everywhere else, so this is a no-op off Pages.
+ */
+function asset(path: string) {
+  return `${import.meta.env.BASE_URL}${path}`;
+}
+
 export const Route = createRootRoute({
   head: () => ({
     meta: [
@@ -19,10 +28,10 @@ export const Route = createRootRoute({
       },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+      { rel: "icon", type: "image/svg+xml", href: asset("favicon.svg") },
       { rel: "stylesheet", href: appCss },
-      { rel: "manifest", href: "/__grok/manifest.webmanifest" },
-      { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
+      { rel: "manifest", href: asset("__grok/manifest.webmanifest") },
+      { rel: "apple-touch-icon", href: asset("__grok/icon-180.png") },
     ],
   }),
   component: () => (

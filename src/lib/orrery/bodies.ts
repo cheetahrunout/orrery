@@ -357,9 +357,18 @@ export const view = {
   theta: 0.62,
   phi: 1.12,
   radius: 74,
+  /** Where the camera rig is easing `radius` toward. */
+  goal: 74,
   minR: 8,
   maxR: 170,
+  /** Snap the eased radius to wherever the rig currently is. */
+  retarget(radius: number) {
+    this.goal = Math.min(this.maxR, Math.max(this.minR, radius));
+  },
   zoomBy(factor: number) {
     this.radius = Math.min(this.maxR, Math.max(this.minR, this.radius * factor));
+    // A manual zoom is the new intent — without this the rig eases the camera
+    // straight back to the previous goal and the zoom looks ignored.
+    this.goal = this.radius;
   },
 };
