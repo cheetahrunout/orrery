@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { BODIES, view } from "@/lib/orrery/bodies";
+import { PRIMARIES, view } from "@/lib/orrery/bodies";
 import { useOrrery } from "@/lib/orrery/store";
 import { Hud } from "./hud";
 
@@ -41,7 +41,7 @@ export function OrreryApp() {
       } else if (e.key === "i" || e.key === "I") {
         store.toggleInfo();
       } else if (e.key === "[") {
-        store.setSpeed(Math.max(0.25, +(store.speed / 2).toFixed(2)));
+        store.setSpeed(Math.max(0.01, +(store.speed / 2).toFixed(2)));
       } else if (e.key === "]") {
         store.setSpeed(Math.min(16, +(store.speed * 2).toFixed(2)));
       } else if (e.key === "-" || e.key === "_") {
@@ -50,7 +50,7 @@ export function OrreryApp() {
         view.zoomBy(0.82);
       } else if (e.key >= "0" && e.key <= "9") {
         // 1-9 walk Sun..Neptune; 0 is the 10th slot so Pluto is reachable too.
-        const body = BODIES[(Number(e.key) + BODIES.length - 1) % BODIES.length];
+        const body = PRIMARIES[(Number(e.key) + PRIMARIES.length - 1) % PRIMARIES.length];
         if (body) store.setFocused(body.id);
       }
     };
