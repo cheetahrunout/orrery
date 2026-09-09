@@ -30,19 +30,12 @@ export function CameraRig() {
   const last = useRef({ x: 0, y: 0 });
   const pinch = useRef<number | null>(null);
   const idle = useRef(0);
-  const radiusGoal = useRef(view.radius);
-  const anim = useRef(0);
 
   useEffect(() => {
     const limits = focusLimits(focusedId);
     view.minR = limits.min;
     view.maxR = limits.max;
-    radiusGoal.current = THREE.MathUtils.clamp(
-      focusRadius(focusedId),
-      limits.min,
-      limits.max,
-    );
-    anim.current = 1;
+    view.retarget(focusRadius(focusedId));
   }, [focusedId]);
 
   useEffect(() => {
@@ -64,7 +57,9 @@ export function CameraRig() {
     };
 
     const move = (e: PointerEvent) => {
-      if (!dragging.current) return;
+      // A two-finger pinch also emits pointermove; without this the zoom
+      // gesture spins the camera at the same time.
+      if (!dragging.current || pinch.current != null) return;
       const dx = e.clientX - last.current.x;
       const dy = e.clientY - last.current.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) orbitPointer.moved = true;
@@ -86,7 +81,6 @@ export function CameraRig() {
       e.preventDefault();
       const factor = Math.exp(e.deltaY * 0.0012);
       view.zoomBy(factor);
-      radiusGoal.current = view.radius;
       idle.current = 0;
       useOrrery.getState().dismissHint();
     };
@@ -96,17 +90,19 @@ export function CameraRig() {
         const a = e.touches[0]!;
         const b = e.touches[1]!;
         const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-        if (pinch.current != null) {
-          view.zoomBy(pinch.current / dist);
-          radiusGoal.current = view.radius;
-        }
+        if (pinch.current != null) view.zoomBy(pinch.current / dist);
         pinch.current = dist;
         idle.current = 0;
         orbitPointer.moved = true;
       }
     };
-    const touchEnd = () => {
-      pinch.current = null;
+    const touchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        pinch.current = null;
+        // The remaining finger would otherwise jump the camera by the full
+        // distance travelled during the pinch.
+        dragging.current = false;
+      }
     };
 
     el.addEventListener("pointerdown", down);
@@ -134,14 +130,13 @@ export function CameraRig() {
     const follow = 1 - Math.exp(-4.2 * delta);
     _target.lerp(_desired, follow);
 
-    if (anim.current > 0) {
-      anim.current = Math.max(0, anim.current - delta * 0.85);
-      view.radius = THREE.MathUtils.lerp(
-        view.radius,
-        radiusGoal.current,
-        1 - Math.exp(-3.4 * delta),
-      );
-    }
+    // Unconditional: a manual zoom sets goal === radius, so this is a no-op
+    // except while a focus change is easing in.
+    view.radius = THREE.MathUtils.lerp(
+      view.radius,
+      view.goal,
+      1 - Math.exp(-3.4 * delta),
+    );
 
     idle.current += delta;
     const overview = focusedId === "sun";

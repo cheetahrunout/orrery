@@ -3,7 +3,7 @@ import { Html, Line, useCursor } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { type Body, orbitPosition, sim, SUN } from "@/lib/orrery/bodies";
-import { orbitCurve, registerBody } from "@/lib/orrery/registry";
+import { orbitCurve, registerBody, ringGeometry } from "@/lib/orrery/registry";
 import { useOrrery } from "@/lib/orrery/store";
 import {
   createBodyTexture,
@@ -16,6 +16,15 @@ const _pos = new THREE.Vector3();
 const _wake = new THREE.Vector3();
 const _world = new THREE.Vector3();
 const noRaycast = () => {};
+
+/**
+ * Axial rotation as a function of sim time rather than accumulated frame
+ * deltas, so spin stops on pause and scales with the speed slider. A negative
+ * `day` (Venus, Uranus, Pluto) falls out as retrograde for free.
+ */
+function spinAngle(body: Body) {
+  return body.day === 0 ? 0 : (sim.time * Math.PI * 2) / body.day;
+}
 
 function useBodyTexture(body: Body) {
   const tex = useMemo(() => createBodyTexture(body), [body]);
@@ -61,7 +70,10 @@ function PlanetLabel({
     const el = spanRef.current;
     if (!el) return;
     const { labels, focusedId } = useOrrery.getState();
-    if (target.current) target.current.getWorldPosition(_world);
+    // _world is shared scratch — without a target it still holds whichever
+    // body wrote it last, so bail rather than measure the wrong distance.
+    if (!target.current) return;
+    target.current.getWorldPosition(_world);
     const dist = camera.position.distanceTo(_world);
     const apparent = radius / Math.max(dist, 0.01);
     const show = focusedId === body.id || hovered || (labels && apparent > 0.018);
@@ -105,9 +117,10 @@ export function Sun() {
     return () => registerBody("sun", null);
   }, []);
 
-  useFrame((_, raw) => {
-    const d = Math.min(raw, 0.1);
-    if (group.current) group.current.rotation.y += d * 0.08;
+  useFrame(() => {
+    // Derived from sim.time, not the frame delta, so the Sun freezes on pause
+    // and follows the speed slider like every other body.
+    if (group.current) group.current.rotation.y = spinAngle(SUN);
   });
 
   return (
@@ -216,10 +229,14 @@ function OrbitPath({ body, active }: { body: Body; active: boolean }) {
 
 function SaturnRings({ radius }: { radius: number }) {
   const tex = useMemo(() => createRingTexture(), []);
+  const geo = useMemo(
+    () => ringGeometry(radius * 1.35, radius * 2.35, 96),
+    [radius],
+  );
   useLayoutEffect(() => () => tex.dispose(), [tex]);
+  useLayoutEffect(() => () => geo.dispose(), [geo]);
   return (
-    <mesh rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
-      <ringGeometry args={[radius * 1.35, radius * 2.35, 96]} />
+    <mesh geometry={geo} rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
       <meshStandardMaterial
         map={tex}
         transparent
@@ -269,15 +286,11 @@ export function Planet({ body }: { body: Body }) {
     return () => registerBody(body.id, null);
   }, [body.id]);
 
-  useFrame((_, raw) => {
-    const d = Math.min(raw, 0.1);
+  useFrame(() => {
     if (!group.current) return;
     orbitPosition(body, sim.time, _pos);
     group.current.position.copy(_pos);
-    if (spin.current) {
-      const rate = body.day === 0 ? 0 : (Math.PI * 2) / Math.abs(body.day) / 18;
-      spin.current.rotation.y += d * rate * Math.sign(body.day || 1);
-    }
+    if (spin.current) spin.current.rotation.y = spinAngle(body);
   });
 
   return (
@@ -285,49 +298,60 @@ export function Planet({ body }: { body: Body }) {
       {trails ? <OrbitPath body={body} active={focused || hovered} /> : null}
       {trails ? <Wake body={body} /> : null}
       <group ref={group}>
-        <group ref={spin} rotation={[0, 0, body.tilt]}>
-          <mesh
-            onClick={(e) => {
-              e.stopPropagation();
-              useOrrery.getState().setFocused(body.id);
-            }}
-            onPointerOver={(e) => {
-              e.stopPropagation();
-              setHovered(true);
-            }}
-            onPointerOut={() => setHovered(false)}
-            scale={hovered ? 1.04 : 1}
-          >
-            <sphereGeometry args={[body.radius, 48, 32]} />
-            <meshStandardMaterial
-              map={tex}
-              roughness={0.82}
-              metalness={0.08}
-              emissive={body.swatch}
-              emissiveIntensity={0.04}
-            />
-          </mesh>
-          {body.atmosphere ? (
-            <mesh scale={1.045} raycast={noRaycast}>
-              <sphereGeometry args={[body.radius, 32, 24]} />
-              <meshBasicMaterial
-                color={body.atmosphere}
-                transparent
-                opacity={0.14}
-                side={THREE.BackSide}
-                depthWrite={false}
+        {/* Tilt and spin must be separate groups. On one group the euler
+            composes as Ry * Rz, so the spin rotates the tilt itself and the
+            pole sweeps a cone once per rotation instead of holding still. */}
+        <group rotation={[0, 0, body.tilt]}>
+          <group ref={spin}>
+            <mesh
+              onClick={(e) => {
+                e.stopPropagation();
+                useOrrery.getState().setFocused(body.id);
+              }}
+              onPointerOver={(e) => {
+                e.stopPropagation();
+                setHovered(true);
+              }}
+              onPointerOut={() => setHovered(false)}
+              scale={hovered ? 1.04 : 1}
+            >
+              <sphereGeometry args={[body.radius, 48, 32]} />
+              <meshStandardMaterial
+                map={tex}
+                roughness={0.82}
+                metalness={0.08}
+                emissive={body.swatch}
+                emissiveIntensity={0.04}
               />
             </mesh>
-          ) : null}
+            {body.atmosphere ? (
+              <mesh scale={1.045} raycast={noRaycast}>
+                <sphereGeometry args={[body.radius, 32, 24]} />
+                <meshBasicMaterial
+                  color={body.atmosphere}
+                  transparent
+                  opacity={0.14}
+                  side={THREE.BackSide}
+                  depthWrite={false}
+                />
+              </mesh>
+            ) : null}
+          </group>
+          {/* Equatorial plane, but the rings don't turn with the surface. */}
           {body.hasRings ? <SaturnRings radius={body.radius} /> : null}
-          {body.id === "earth" ? <EarthMoon parentRadius={body.radius} /> : null}
         </group>
+        {/* Outside the tilt/spin frame: the Moon orbits near the ecliptic,
+            and inheriting the spin made it lap Earth once per Earth day. */}
+        {body.id === "earth" ? <EarthMoon parentRadius={body.radius} /> : null}
         {focused ? <FocusRing radius={body.radius} /> : null}
         <PlanetLabel body={body} radius={body.radius} hovered={hovered} target={group} />
       </group>
     </>
   );
 }
+
+/** Main-belt bodies circle in ~4.6 yr — between Mars (1.9) and Jupiter (11.9). */
+const BELT_RATE = (Math.PI * 2) / 4.6;
 
 export function AsteroidBelt() {
   const mesh = useRef<THREE.InstancedMesh>(null);
@@ -351,7 +375,7 @@ export function AsteroidBelt() {
     const t = sim.time;
     for (let i = 0; i < count; i++) {
       const s = seeds[i]!;
-      const a = s.a + t * 0.22;
+      const a = s.a + t * BELT_RATE;
       dummy.position.set(Math.cos(a) * s.r, s.y, Math.sin(a) * s.r);
       dummy.rotation.set(s.rx, s.ry + t * s.spin, 0);
       dummy.scale.setScalar(s.s);
