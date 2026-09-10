@@ -10,7 +10,15 @@ import { useOrrery } from "@/lib/orrery/store";
 const _target = new THREE.Vector3();
 const _desired = new THREE.Vector3();
 const _offset = new THREE.Vector3();
-const _look = new THREE.Vector3();
+/**
+ * Where the camera is looking, expressed relative to the focused body rather
+ * than in world space. It decays to exactly zero, which is what makes the
+ * subject dead centre: an absolute target chased with a lerp can never catch a
+ * moving body, and the miss grows with orbital speed. At true scale Earth
+ * covers ~16,000 scene units per second while the camera sits 10 units away,
+ * so the old chase left it completely out of frame.
+ */
+const _lag = new THREE.Vector3();
 
 /**
  * Framing is derived from the body's drawn size rather than fixed numbers: the
@@ -30,7 +38,11 @@ function focusRadius(id: string) {
   const rings = body.hasRings
     ? moonOrbitUnits(2.27 * body.radiusKm, body.radiusKm)
     : 0;
-  return Math.max(r * 10, inner * 3.4, rings * 4.2);
+  // Widen for the nearest moon, but never so far that the planet you actually
+  // selected becomes a speck: at true scale the Moon orbits 60 Earth radii
+  // out, which would park the camera 205 radii away from a 1-radius Earth.
+  const forMoons = Math.min(inner * 3.4, r * 25);
+  return Math.max(r * 10, forMoons, rings * 4.2);
 }
 
 function focusLimits(id: string) {
@@ -57,6 +69,8 @@ export function CameraRig() {
 
   const scaleVersion = useOrrery((s) => s.scaleVersion);
 
+  const lastFocus = useRef(focusedId);
+
   useEffect(() => {
     const limits = focusLimits(focusedId);
     view.minR = limits.min;
@@ -65,6 +79,20 @@ export function CameraRig() {
     // A scale change can leave the camera kilometres inside a planet or so far
     // out the system is a dot, so snap the eased radius into the new bounds.
     view.radius = THREE.MathUtils.clamp(view.radius, limits.min, limits.max);
+
+    bodyWorldPosition(focusedId, _desired);
+    if (lastFocus.current === focusedId) {
+      // Scale change: the old target is in stale units, so easing from it would
+      // fling the camera across the system. Cut instead.
+      _lag.set(0, 0, 0);
+    } else {
+      // Focus change: keep looking where we were, then let it decay in — that
+      // decay *is* the fly-to, and it ends at exactly the body.
+      _lag.subVectors(_target, _desired);
+      lastFocus.current = focusedId;
+      const cap = focusRadius(focusedId) * 60;
+      if (_lag.lengthSq() > cap * cap) _lag.setLength(cap);
+    }
   }, [focusedId, scaleVersion]);
 
   useEffect(() => {
@@ -156,8 +184,13 @@ export function CameraRig() {
     const delta = Math.min(rawDelta, 0.1);
     bodyWorldPosition(focusedId, _desired);
 
-    const follow = 1 - Math.exp(-4.2 * delta);
-    _target.lerp(_desired, follow);
+    _lag.multiplyScalar(Math.exp(-4.2 * delta));
+    // Exponential decay only approaches zero, and "almost centred" is still
+    // visibly off at these distances, so snap once the miss is under a
+    // thousandth of the body.
+    const snap = Math.max(radiusOf(getBody(focusedId)) * 1e-3, Number.MIN_VALUE);
+    if (_lag.lengthSq() < snap * snap) _lag.set(0, 0, 0);
+    _target.copy(_desired).add(_lag);
 
     // Unconditional: a manual zoom sets goal === radius, so this is a no-op
     // except while a focus change is easing in.
@@ -179,9 +212,28 @@ export function CameraRig() {
       view.radius * Math.cos(view.phi),
       view.radius * sinPhi * Math.cos(view.theta),
     );
-    _look.copy(_target).add(_offset);
-    camera.position.lerp(_look, 1 - Math.exp(-7.5 * delta));
+    // Placed exactly, not eased. Easing the position is the same trap as
+    // easing the target: it trails a fast body by speed x time-constant, which
+    // both decentres the subject and leaves the camera at the wrong distance.
+    // Smoothness comes from theta/phi following the pointer and from the
+    // radius easing above, neither of which depends on how fast the body moves.
+    camera.position.copy(_target).add(_offset);
     camera.lookAt(_target);
+
+    // The near plane has to track the viewing distance, not the size of the
+    // system. Deriving it from the scene reach put it at 10.6 units while the
+    // camera sat 10 units from Earth at true scale, clipping the planet away
+    // to a sliver. The log depth buffer absorbs the resulting near/far range.
+    const near = Math.max(view.radius * 0.002, 1e-6);
+    const far = Math.max(overviewRadius() * 8, view.radius * 16);
+    if (
+      Math.abs(camera.near - near) > near * 0.05 ||
+      Math.abs(camera.far - far) > far * 0.05
+    ) {
+      camera.near = near;
+      camera.far = far;
+      camera.updateProjectionMatrix();
+    }
   });
 
   return null;

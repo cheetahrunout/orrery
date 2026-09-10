@@ -91,11 +91,14 @@ function BodyLabel({
   });
   return (
     <Html
-      position={[0, radius + radius * 0.55 + 0.2, 0]}
+      // Offset purely in body radii: a constant term means nothing when a
+      // radius can be 0.02 units or 109.
+      position={[0, radius * 1.6, 0]}
       center
-      sprite
       occlude={false}
-      distanceFactor={22}
+      // No distanceFactor. It scales the label inversely with camera distance,
+      // which was fine at one fixed scale but blows moon labels up to fill the
+      // screen once you fly in close. Constant screen size instead.
       wrapperClass="pointer-events-none"
       style={{ pointerEvents: "none" }}
       zIndexRange={[0, 0]}
