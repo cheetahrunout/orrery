@@ -83,10 +83,12 @@ function BodyLabel({
     target.current.getWorldPosition(_world);
     const dist = camera.position.distanceTo(_world);
     const apparent = radius / Math.max(dist, 0.01);
+    // The toggle gates every path. Focus and hover used to short-circuit ahead
+    // of it, which at true scale made the button look broken: every body is far
+    // below the apparent-size threshold there, so the focused label was the only
+    // one on screen — and it was the one ignoring the setting.
     const show =
-      focusedId === body.id ||
-      hovered ||
-      (labels && (always ? true : apparent > 0.018));
+      labels && (focusedId === body.id || hovered || always || apparent > 0.018);
     el.style.opacity = show ? "1" : "0";
   });
   return (
@@ -292,6 +294,7 @@ function Moon({ body, visible }: { body: Body; visible: boolean }) {
   const group = useRef<THREE.Group>(null);
   const spin = useRef<THREE.Mesh>(null);
   const tex = useBodyTexture(body);
+  const trails = useOrrery((s) => s.trails);
   const focused = useOrrery((s) => s.focusedId === body.id);
   useOrrery((s) => s.scaleVersion);
   const [hovered, setHovered] = useState(false);
@@ -313,7 +316,11 @@ function Moon({ body, visible }: { body: Body; visible: boolean }) {
 
   return (
     <>
-      {visible ? <OrbitPath body={body} active={focused} segments={96} /> : null}
+      {/* Trails covers moon orbits too — following a moon used to leave its
+          system's rings on screen with no way to clear them. */}
+      {visible && trails ? (
+        <OrbitPath body={body} active={focused} segments={96} />
+      ) : null}
       <group ref={group}>
         <mesh
           ref={spin}
