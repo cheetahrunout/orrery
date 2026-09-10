@@ -12,6 +12,9 @@ export function CanvasView() {
         antialias: true,
         alpha: false,
         powerPreference: "high-performance",
+        // True scale puts the near plane ~0.02 units out and the far plane
+        // ~6,000,000; a linear depth buffer z-fights itself apart over that.
+        logarithmicDepthBuffer: true,
       }}
       camera={{ fov: 42, near: 0.12, far: 420, position: [0, 28, 74] }}
       onPointerMissed={() => {
