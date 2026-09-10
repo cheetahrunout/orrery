@@ -19,6 +19,11 @@ function hash(id: string) {
   return h >>> 0;
 }
 
+function hexToRgb(hex: string): number[] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 function lerpC(a: number[], b: number[], t: number) {
   return [
     a[0]! + (b[0]! - a[0]!) * t,
@@ -252,12 +257,37 @@ const painters: Record<string, (ctx: CanvasRenderingContext2D, w: number, h: num
   pluto,
 };
 
+/**
+ * Fallback for the moons: mottled rock or ice derived from the body's swatch,
+ * with craters scaled to how battered a body that size tends to look. A flat
+ * fill reads as a paper cut-out once you fly close.
+ */
+function genericBody(id: string, swatch: string) {
+  return (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+    const rng = mulberry32(hash(id));
+    const n = noise2(rng, 64, 32, 5);
+    const base = hexToRgb(swatch);
+    const dark = base.map((c) => c * 0.55);
+    const light = base.map((c) => Math.min(255, c * 1.18));
+    paintSphere(ctx, w, h, (x, y) => lerpC(dark, light, n(x, y)));
+    const craters = 40 + Math.floor(rng() * 40);
+    for (let i = 0; i < craters; i++) {
+      const r = 1.5 + rng() * 9;
+      ctx.beginPath();
+      ctx.arc(rng() * w, rng() * h, r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(30,28,26,${0.12 + rng() * 0.25})`;
+      ctx.lineWidth = 1 + rng() * 1.6;
+      ctx.stroke();
+    }
+  };
+}
+
 export function createBodyTexture(body: Body) {
-  const paint = painters[body.id] ?? ((ctx, w, h) => {
-    ctx.fillStyle = body.swatch;
-    ctx.fillRect(0, 0, w, h);
-  });
-  return canvasTexture(paint);
+  const painter = painters[body.id];
+  // Half resolution for the moons only: 28 of them at full size is 14 MB of
+  // canvas for bodies that are a few pixels across most of the time.
+  if (painter) return canvasTexture(painter, 512, 256);
+  return canvasTexture(genericBody(body.id, body.swatch), 256, 128);
 }
 
 /**

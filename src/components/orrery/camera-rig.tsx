@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { getBody, view } from "@/lib/orrery/bodies";
+import { getBody, moonsOf, radiusOf, view } from "@/lib/orrery/bodies";
+import { auToUnits, moonOrbitUnits } from "@/lib/orrery/scale";
 import { orbitPointer } from "@/lib/orrery/pointer";
 import { bodyWorldPosition } from "@/lib/orrery/registry";
 import { useOrrery } from "@/lib/orrery/store";
@@ -11,16 +12,39 @@ const _desired = new THREE.Vector3();
 const _offset = new THREE.Vector3();
 const _look = new THREE.Vector3();
 
+/**
+ * Framing is derived from the body's drawn size rather than fixed numbers: the
+ * scale sliders move every radius over five orders of magnitude, so any
+ * constant here would be right at exactly one setting.
+ */
 function focusRadius(id: string) {
+  if (id === "sun") return overviewRadius();
   const body = getBody(id);
-  if (id === "sun") return 74;
-  return body.radius * 7.5 + 5.5;
+  const r = radiusOf(body);
+  // Pull back far enough to hold the inner moons — and Saturn's rings, which
+  // reach 2.35 radii on their own — rather than filling the frame with globe.
+  const moons = moonsOf(id);
+  const inner = moons.length
+    ? Math.min(...moons.map((m) => moonOrbitUnits(m.semiMajorKm, body.radiusKm)))
+    : 0;
+  const rings = body.hasRings
+    ? moonOrbitUnits(2.27 * body.radiusKm, body.radiusKm)
+    : 0;
+  return Math.max(r * 10, inner * 3.4, rings * 4.2);
 }
 
 function focusLimits(id: string) {
-  const body = getBody(id);
-  if (id === "sun") return { min: 16, max: 170 };
-  return { min: body.radius * 2.4 + 1.2, max: body.radius * 28 + 18 };
+  if (id === "sun") {
+    const r = overviewRadius();
+    return { min: r * 0.05, max: r * 2.6 };
+  }
+  const r = radiusOf(getBody(id));
+  return { min: r * 1.6, max: r * 900 };
+}
+
+/** Far enough out to hold the whole planetary system in frame. */
+function overviewRadius() {
+  return auToUnits(34);
 }
 
 export function CameraRig() {
@@ -31,12 +55,17 @@ export function CameraRig() {
   const pinch = useRef<number | null>(null);
   const idle = useRef(0);
 
+  const scaleVersion = useOrrery((s) => s.scaleVersion);
+
   useEffect(() => {
     const limits = focusLimits(focusedId);
     view.minR = limits.min;
     view.maxR = limits.max;
     view.retarget(focusRadius(focusedId));
-  }, [focusedId]);
+    // A scale change can leave the camera kilometres inside a planet or so far
+    // out the system is a dot, so snap the eased radius into the new bounds.
+    view.radius = THREE.MathUtils.clamp(view.radius, limits.min, limits.max);
+  }, [focusedId, scaleVersion]);
 
   useEffect(() => {
     const el = gl.domElement;

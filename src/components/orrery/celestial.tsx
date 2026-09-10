@@ -2,8 +2,22 @@ import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "reac
 import { Html, Line, useCursor } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { type Body, orbitPosition, sim, SUN } from "@/lib/orrery/bodies";
+import {
+  type Body,
+  moonsOf,
+  orbitPosition,
+  radiusOf,
+  sim,
+  spinAngle,
+  SUN,
+} from "@/lib/orrery/bodies";
 import { orbitCurve, registerBody, ringGeometry } from "@/lib/orrery/registry";
+import {
+  auToUnits,
+  moonOrbitUnits,
+  radiusUnits,
+  unitsToAu,
+} from "@/lib/orrery/scale";
 import { useOrrery } from "@/lib/orrery/store";
 import {
   createBodyTexture,
@@ -17,15 +31,6 @@ const _wake = new THREE.Vector3();
 const _world = new THREE.Vector3();
 const noRaycast = () => {};
 
-/**
- * Axial rotation as a function of sim time rather than accumulated frame
- * deltas, so spin stops on pause and scales with the speed slider. A negative
- * `day` (Venus, Uranus, Pluto) falls out as retrograde for free.
- */
-function spinAngle(body: Body) {
-  return body.day === 0 ? 0 : (sim.time * Math.PI * 2) / body.day;
-}
-
 function useBodyTexture(body: Body) {
   const tex = useMemo(() => createBodyTexture(body), [body]);
   useLayoutEffect(() => () => tex.dispose(), [tex]);
@@ -37,8 +42,7 @@ function FocusRing({ radius }: { radius: number }) {
   useFrame(() => {
     if (!ref.current) return;
     const t = (performance.now() / 1800) % 1;
-    const s = 1 + Math.sin(t * Math.PI * 2) * 0.04;
-    ref.current.scale.setScalar(s);
+    ref.current.scale.setScalar(1 + Math.sin(t * Math.PI * 2) * 0.04);
   });
   return (
     <mesh ref={ref} rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
@@ -54,16 +58,19 @@ function FocusRing({ radius }: { radius: number }) {
   );
 }
 
-function PlanetLabel({
+function BodyLabel({
   body,
   radius,
   hovered,
   target,
+  always,
 }: {
-  body: Body
-  radius: number
-  hovered: boolean
-  target: RefObject<THREE.Object3D | null>
+  body: Body;
+  radius: number;
+  hovered: boolean;
+  target: RefObject<THREE.Object3D | null>;
+  /** Moons: shown only while their planet is the subject, never on apparent size. */
+  always?: boolean;
 }) {
   const spanRef = useRef<HTMLSpanElement>(null);
   useFrame(({ camera }) => {
@@ -76,12 +83,15 @@ function PlanetLabel({
     target.current.getWorldPosition(_world);
     const dist = camera.position.distanceTo(_world);
     const apparent = radius / Math.max(dist, 0.01);
-    const show = focusedId === body.id || hovered || (labels && apparent > 0.018);
+    const show =
+      focusedId === body.id ||
+      hovered ||
+      (labels && (always ? true : apparent > 0.018));
     el.style.opacity = show ? "1" : "0";
   });
   return (
     <Html
-      position={[0, radius + 0.55, 0]}
+      position={[0, radius + radius * 0.55 + 0.2, 0]}
       center
       sprite
       occlude={false}
@@ -94,7 +104,8 @@ function PlanetLabel({
         ref={spanRef}
         aria-hidden
         className={cn(
-          "whitespace-nowrap font-display text-sm italic tracking-display text-fg transition-opacity duration-(--motion-quick)",
+          "whitespace-nowrap font-display italic tracking-display text-fg transition-opacity duration-(--motion-quick)",
+          body.kind === "moon" ? "text-2xs not-italic text-muted" : "text-sm",
         )}
       >
         {body.name}
@@ -109,8 +120,11 @@ export function Sun() {
   const glow = useMemo(() => createGlowTexture(), []);
   useLayoutEffect(() => () => glow.dispose(), [glow]);
   const focused = useOrrery((s) => s.focusedId === "sun");
+  // Re-render when the scale changes so the geometry args below rebuild.
+  useOrrery((s) => s.scaleVersion);
   const [hovered, setHovered] = useState(false);
   useCursor(hovered);
+  const r = radiusOf(SUN);
 
   useLayoutEffect(() => {
     registerBody("sun", group.current);
@@ -118,9 +132,7 @@ export function Sun() {
   }, []);
 
   useFrame(() => {
-    // Derived from sim.time, not the frame delta, so the Sun freezes on pause
-    // and follows the speed slider like every other body.
-    if (group.current) group.current.rotation.y = spinAngle(SUN);
+    if (group.current) group.current.rotation.y = spinAngle(SUN, sim.time);
   });
 
   return (
@@ -136,11 +148,11 @@ export function Sun() {
         }}
         onPointerOut={() => setHovered(false)}
       >
-        <sphereGeometry args={[SUN.radius, 64, 48]} />
+        <sphereGeometry args={[r, 64, 48]} />
         <meshBasicMaterial map={tex} />
       </mesh>
       <mesh scale={1.14} raycast={noRaycast}>
-        <sphereGeometry args={[SUN.radius, 32, 24]} />
+        <sphereGeometry args={[r, 32, 24]} />
         <meshBasicMaterial
           color="#ffb347"
           transparent
@@ -149,7 +161,7 @@ export function Sun() {
           depthWrite={false}
         />
       </mesh>
-      <sprite scale={[SUN.radius * 7.6, SUN.radius * 7.6, 1]} raycast={noRaycast}>
+      <sprite scale={[r * 7.6, r * 7.6, 1]} raycast={noRaycast}>
         <spriteMaterial
           map={glow}
           blending={THREE.AdditiveBlending}
@@ -157,21 +169,21 @@ export function Sun() {
           opacity={0.85}
         />
       </sprite>
-      <pointLight color="#fff1d0" intensity={4.4} distance={240} decay={1.55} />
-      {focused ? <FocusRing radius={SUN.radius} /> : null}
-      <PlanetLabel body={SUN} radius={SUN.radius} hovered={hovered} target={group} />
+      {/* No falloff: the distance slider spans five orders of magnitude, and a
+          decaying light leaves the outer planets pitch black at true scale. */}
+      <pointLight color="#fff1d0" intensity={2.2} distance={0} decay={0} />
+      {focused ? <FocusRing radius={r} /> : null}
+      <BodyLabel body={SUN} radius={r} hovered={hovered} target={group} />
     </group>
   );
 }
 
 function Wake({ body }: { body: Body }) {
+  const scaleVersion = useOrrery((s) => s.scaleVersion);
   const line = useMemo(() => {
     const geo = new THREE.BufferGeometry();
     const n = 40;
-    geo.setAttribute(
-      "position",
-      new THREE.BufferAttribute(new Float32Array(n * 3), 3),
-    );
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     const colors = new Float32Array(n * 3);
     const c = new THREE.Color(body.swatch);
     for (let i = 0; i < n; i++) {
@@ -200,10 +212,12 @@ function Wake({ body }: { body: Body }) {
   );
 
   useFrame(() => {
+    void scaleVersion;
     const pos = line.geometry.getAttribute("position") as THREE.BufferAttribute;
     const n = pos.count;
+    const periodYears = body.periodDays / 365.256;
     for (let i = 0; i < n; i++) {
-      const years = sim.time - (i / (n - 1)) * body.period * 0.12;
+      const years = sim.time - (i / (n - 1)) * periodYears * 0.12;
       orbitPosition(body, years, _wake);
       pos.setXYZ(i, _wake.x, _wake.y, _wake.z);
     }
@@ -213,8 +227,22 @@ function Wake({ body }: { body: Body }) {
   return <primitive object={line} />;
 }
 
-function OrbitPath({ body, active }: { body: Body; active: boolean }) {
-  const points = useMemo(() => orbitCurve(body, 192), [body]);
+function OrbitPath({
+  body,
+  active,
+  segments = 192,
+}: {
+  body: Body;
+  active: boolean;
+  segments?: number;
+}) {
+  const scaleVersion = useOrrery((s) => s.scaleVersion);
+  const points = useMemo(
+    () => orbitCurve(body, segments),
+    // Scale changes move every point on the curve.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [body, segments, scaleVersion],
+  );
   return (
     <Line
       points={points}
@@ -227,12 +255,20 @@ function OrbitPath({ body, active }: { body: Body; active: boolean }) {
   );
 }
 
-function SaturnRings({ radius }: { radius: number }) {
+/**
+ * Ring edges go through the same exponent as moon orbits. A fixed multiple of
+ * the drawn radius drifts out of step with the moons once sizes are
+ * compressed — at the default scale it put Mimas (3.19 Saturn radii, really
+ * well outside the A ring) inside the rings.
+ */
+function SaturnRings({ body }: { body: Body }) {
   const tex = useMemo(() => createRingTexture(), []);
-  const geo = useMemo(
-    () => ringGeometry(radius * 1.35, radius * 2.35, 96),
-    [radius],
-  );
+  const geo = useMemo(() => {
+    // D ring inner edge to A ring outer edge, in Saturn radii.
+    const inner = moonOrbitUnits(1.24 * body.radiusKm, body.radiusKm);
+    const outer = moonOrbitUnits(2.27 * body.radiusKm, body.radiusKm);
+    return ringGeometry(inner, outer, 96);
+  }, [body.radiusKm]);
   useLayoutEffect(() => () => tex.dispose(), [tex]);
   useLayoutEffect(() => () => geo.dispose(), [geo]);
   return (
@@ -249,25 +285,55 @@ function SaturnRings({ radius }: { radius: number }) {
   );
 }
 
-function EarthMoon({ parentRadius }: { parentRadius: number }) {
-  const ref = useRef<THREE.Group>(null);
+function Moon({ body, visible }: { body: Body; visible: boolean }) {
+  const group = useRef<THREE.Group>(null);
+  const spin = useRef<THREE.Mesh>(null);
+  const tex = useBodyTexture(body);
+  const focused = useOrrery((s) => s.focusedId === body.id);
+  useOrrery((s) => s.scaleVersion);
+  const [hovered, setHovered] = useState(false);
+  useCursor(hovered);
+  const r = radiusOf(body);
+
+  useLayoutEffect(() => {
+    registerBody(body.id, group.current);
+    return () => registerBody(body.id, null);
+  }, [body.id]);
+
   useFrame(() => {
-    if (!ref.current) return;
-    const a = (sim.time / 0.0748) * Math.PI * 2;
-    const r = parentRadius * 2.6;
-    ref.current.position.set(
-      Math.cos(a) * r,
-      Math.sin(a) * 0.12 * r,
-      Math.sin(a) * r,
-    );
+    if (group.current) {
+      orbitPosition(body, sim.time, _pos);
+      group.current.position.copy(_pos);
+    }
+    if (spin.current) spin.current.rotation.y = spinAngle(body, sim.time);
   });
+
   return (
-    <group ref={ref}>
-      <mesh raycast={noRaycast}>
-        <sphereGeometry args={[0.18, 16, 12]} />
-        <meshStandardMaterial color="#b8b4ae" roughness={1} />
-      </mesh>
-    </group>
+    <>
+      {visible ? <OrbitPath body={body} active={focused} segments={96} /> : null}
+      <group ref={group}>
+        <mesh
+          ref={spin}
+          onClick={(e) => {
+            e.stopPropagation();
+            useOrrery.getState().setFocused(body.id);
+          }}
+          onPointerOver={(e) => {
+            e.stopPropagation();
+            setHovered(true);
+          }}
+          onPointerOut={() => setHovered(false)}
+          scale={hovered ? 1.08 : 1}
+        >
+          <sphereGeometry args={[r, 24, 16]} />
+          <meshStandardMaterial map={tex} roughness={0.95} metalness={0.02} />
+        </mesh>
+        {focused ? <FocusRing radius={r} /> : null}
+        {visible ? (
+          <BodyLabel body={body} radius={r} hovered={hovered} target={group} always />
+        ) : null}
+      </group>
+    </>
   );
 }
 
@@ -277,9 +343,17 @@ export function Planet({ body }: { body: Body }) {
   const tex = useBodyTexture(body);
   const focusedId = useOrrery((s) => s.focusedId);
   const trails = useOrrery((s) => s.trails);
+  useOrrery((s) => s.scaleVersion);
   const focused = focusedId === body.id;
   const [hovered, setHovered] = useState(false);
   useCursor(hovered);
+  const r = radiusOf(body);
+  const moons = useMemo(() => moonsOf(body.id), [body.id]);
+
+  // 28 moons and their orbit rings everywhere at once is spaghetti — show a
+  // planet's system only while it, or one of its moons, is the subject.
+  const systemActive =
+    focused || moons.some((m) => m.id === focusedId);
 
   useLayoutEffect(() => {
     registerBody(body.id, group.current);
@@ -290,7 +364,7 @@ export function Planet({ body }: { body: Body }) {
     if (!group.current) return;
     orbitPosition(body, sim.time, _pos);
     group.current.position.copy(_pos);
-    if (spin.current) spin.current.rotation.y = spinAngle(body);
+    if (spin.current) spin.current.rotation.y = spinAngle(body, sim.time);
   });
 
   return (
@@ -315,7 +389,7 @@ export function Planet({ body }: { body: Body }) {
               onPointerOut={() => setHovered(false)}
               scale={hovered ? 1.04 : 1}
             >
-              <sphereGeometry args={[body.radius, 48, 32]} />
+              <sphereGeometry args={[r, 48, 32]} />
               <meshStandardMaterial
                 map={tex}
                 roughness={0.82}
@@ -326,7 +400,7 @@ export function Planet({ body }: { body: Body }) {
             </mesh>
             {body.atmosphere ? (
               <mesh scale={1.045} raycast={noRaycast}>
-                <sphereGeometry args={[body.radius, 32, 24]} />
+                <sphereGeometry args={[r, 32, 24]} />
                 <meshBasicMaterial
                   color={body.atmosphere}
                   transparent
@@ -338,47 +412,60 @@ export function Planet({ body }: { body: Body }) {
             ) : null}
           </group>
           {/* Equatorial plane, but the rings don't turn with the surface. */}
-          {body.hasRings ? <SaturnRings radius={body.radius} /> : null}
+          {body.hasRings ? <SaturnRings body={body} /> : null}
+          {/* Regular moons orbit the equator, so they belong in the tilt frame
+              and outside the spin frame — which is why Uranus's moons stand
+              almost vertical, as they really do. */}
+          {moons.map((m) => (
+            <Moon key={m.id} body={m} visible={systemActive} />
+          ))}
         </group>
-        {/* Outside the tilt/spin frame: the Moon orbits near the ecliptic,
-            and inheriting the spin made it lap Earth once per Earth day. */}
-        {body.id === "earth" ? <EarthMoon parentRadius={body.radius} /> : null}
-        {focused ? <FocusRing radius={body.radius} /> : null}
-        <PlanetLabel body={body} radius={body.radius} hovered={hovered} target={group} />
+        {focused ? <FocusRing radius={r} /> : null}
+        <BodyLabel body={body} radius={r} hovered={hovered} target={group} />
       </group>
     </>
   );
 }
 
-/** Main-belt bodies circle in ~4.6 yr — between Mars (1.9) and Jupiter (11.9). */
-const BELT_RATE = (Math.PI * 2) / 4.6;
-
 export function AsteroidBelt() {
   const mesh = useRef<THREE.InstancedMesh>(null);
   const count = 420;
+  const distanceDiv = useOrrery((s) => s.distanceDiv);
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const seeds = useMemo(() => {
-    const rng = () => Math.random();
-    return Array.from({ length: count }, () => ({
-      a: rng() * Math.PI * 2,
-      r: 28.4 + rng() * 5.6,
-      y: (rng() - 0.5) * 0.55,
-      s: 0.03 + rng() * 0.07,
-      spin: 0.2 + rng() * 0.8,
-      rx: rng() * Math.PI,
-      ry: rng() * Math.PI,
-    }));
-  }, [count]);
+  // The real main belt spans roughly 2.1-3.3 AU.
+  const inner = auToUnits(2.1, distanceDiv);
+  const outer = auToUnits(3.3, distanceDiv);
+  // Ceres-ish, so the specks grow and shrink with the size slider.
+  const grain = radiusUnits(470);
+  const seeds = useMemo(
+    () =>
+      Array.from({ length: count }, () => ({
+        a: Math.random() * Math.PI * 2,
+        t: Math.random(),
+        y: (Math.random() - 0.5) * 0.12,
+        s: 0.02 + Math.random() * 0.05,
+        spin: 0.2 + Math.random() * 0.8,
+        rx: Math.random() * Math.PI,
+        ry: Math.random() * Math.PI,
+      })),
+    [count],
+  );
 
   useFrame(() => {
     if (!mesh.current) return;
     const t = sim.time;
+    const span = outer - inner;
     for (let i = 0; i < count; i++) {
       const s = seeds[i]!;
-      const a = s.a + t * BELT_RATE;
-      dummy.position.set(Math.cos(a) * s.r, s.y, Math.sin(a) * s.r);
+      const rr = inner + s.t * span;
+      // Kepler's third law, so the belt shears the way a real one does
+      // instead of turning as a rigid disc.
+      const au = unitsToAu(rr, distanceDiv);
+      const periodYears = Math.max(au ** 1.5, 1e-6);
+      const a = s.a + (t / periodYears) * Math.PI * 2;
+      dummy.position.set(Math.cos(a) * rr, s.y * span, Math.sin(a) * rr);
       dummy.rotation.set(s.rx, s.ry + t * s.spin, 0);
-      dummy.scale.setScalar(s.s);
+      dummy.scale.setScalar(s.s * grain);
       dummy.updateMatrix();
       mesh.current.setMatrixAt(i, dummy.matrix);
     }
