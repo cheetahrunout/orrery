@@ -1,6 +1,4 @@
 import { Canvas } from "@react-three/fiber";
-import { orbitPointer } from "@/lib/orrery/pointer";
-import { useOrrery } from "@/lib/orrery/store";
 import { Scene } from "./scene";
 
 export function CanvasView() {
@@ -17,10 +15,10 @@ export function CanvasView() {
         logarithmicDepthBuffer: true,
       }}
       camera={{ fov: 42, near: 0.12, far: 420, position: [0, 28, 74] }}
-      onPointerMissed={() => {
-        if (orbitPointer.moved) return;
-        useOrrery.getState().setFocused("sun");
-      }}
+      // No onPointerMissed deselect. Tapping empty space used to snap back to
+      // the Sun, and at true scale a body covers a handful of pixels, so nearly
+      // every tap missed and silently dropped the focus. Overview, Esc and the
+      // body list are the ways out.
     >
       <Scene />
     </Canvas>

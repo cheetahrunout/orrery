@@ -3,7 +3,6 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { getBody, moonsOf, radiusOf, view } from "@/lib/orrery/bodies";
 import { auToUnits, moonOrbitUnits } from "@/lib/orrery/scale";
-import { orbitPointer } from "@/lib/orrery/pointer";
 import { bodyWorldPosition } from "@/lib/orrery/registry";
 import { useOrrery } from "@/lib/orrery/store";
 
@@ -19,6 +18,38 @@ const _offset = new THREE.Vector3();
  * so the old chase left it completely out of frame.
  */
 const _lag = new THREE.Vector3();
+const _parent = new THREE.Vector3();
+
+/**
+ * The world azimuth the camera used last frame. Kept so a focus change can
+ * rebase `view.theta` onto the new parent without the view snapping round.
+ */
+let lastWorldTheta = view.theta;
+
+/** What a body orbits: its planet for a moon, the Sun for a planet. */
+function parentIdOf(id: string): string | null {
+  if (id === "sun") return null;
+  return getBody(id).parentId ?? "sun";
+}
+
+/**
+ * Azimuth of the direction *away* from whatever the body orbits, so a
+ * `view.theta` of 0 puts that parent straight behind the subject.
+ *
+ * Measuring the camera angle in world axes instead leaves the parent sweeping
+ * a full circle through the frame every orbit — once every 1.8 days while
+ * following Io. Anchoring here holds it still, and swiping still re-aims
+ * freely; it just offsets from the parent line rather than from world north.
+ */
+function parentAzimuth(id: string, bodyPos: THREE.Vector3): number {
+  const pid = parentIdOf(id);
+  if (!pid) return 0;
+  bodyWorldPosition(pid, _parent);
+  const dx = _parent.x - bodyPos.x;
+  const dz = _parent.z - bodyPos.z;
+  if (dx * dx + dz * dz < 1e-12) return 0;
+  return Math.atan2(dx, dz) + Math.PI;
+}
 
 /**
  * Framing is derived from the body's drawn size rather than fixed numbers: the
@@ -90,6 +121,10 @@ export function CameraRig() {
       // decay *is* the fly-to, and it ends at exactly the body.
       _lag.subVectors(_target, _desired);
       lastFocus.current = focusedId;
+      // theta is relative to the new parent now, so re-express the angle the
+      // camera is already at. Without this, switching subjects whips the view
+      // round by the difference between the two parent directions.
+      view.theta = lastWorldTheta - parentAzimuth(focusedId, _desired);
       const cap = focusRadius(focusedId) * 60;
       if (_lag.lengthSq() > cap * cap) _lag.setLength(cap);
     }
@@ -102,7 +137,6 @@ export function CameraRig() {
     const down = (e: PointerEvent) => {
       if (e.button !== 0 && e.pointerType === "mouse") return;
       dragging.current = true;
-      orbitPointer.moved = false;
       last.current = { x: e.clientX, y: e.clientY };
       idle.current = 0;
       useOrrery.getState().dismissHint();
@@ -119,7 +153,6 @@ export function CameraRig() {
       if (!dragging.current || pinch.current != null) return;
       const dx = e.clientX - last.current.x;
       const dy = e.clientY - last.current.y;
-      if (Math.abs(dx) + Math.abs(dy) > 3) orbitPointer.moved = true;
       last.current = { x: e.clientX, y: e.clientY };
       view.theta -= dx * 0.005;
       view.phi = THREE.MathUtils.clamp(
@@ -150,7 +183,6 @@ export function CameraRig() {
         if (pinch.current != null) view.zoomBy(pinch.current / dist);
         pinch.current = dist;
         idle.current = 0;
-        orbitPointer.moved = true;
       }
     };
     const touchEnd = (e: TouchEvent) => {
@@ -206,11 +238,13 @@ export function CameraRig() {
       view.theta += delta * 0.045;
     }
 
+    const worldTheta = view.theta + parentAzimuth(focusedId, _desired);
+    lastWorldTheta = worldTheta;
     const sinPhi = Math.sin(view.phi);
     _offset.set(
-      view.radius * sinPhi * Math.sin(view.theta),
+      view.radius * sinPhi * Math.sin(worldTheta),
       view.radius * Math.cos(view.phi),
-      view.radius * sinPhi * Math.cos(view.theta),
+      view.radius * sinPhi * Math.cos(worldTheta),
     );
     // Placed exactly, not eased. Easing the position is the same trap as
     // easing the target: it trails a fast body by speed x time-constant, which
